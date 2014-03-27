@@ -61,6 +61,7 @@ using namespace boost::accumulators;
 
 static const std::string name = "pr2_ethercat";
 
+#define MSEC_PER_SECOND USEC_PER_SECOND/1000
 
 static struct
 {
@@ -204,7 +205,7 @@ static void publishDiagnostics(realtime_tools::RealtimePublisher<diagnostic_msgs
 static inline double now()
 {
   struct timespec n;
-  clock_gettime(CLOCK_MONOTONIC, &n);
+  clock_gettime(CLOCK_REALTIME, &n);
   return double(n.tv_nsec) / NSEC_PER_SECOND + n.tv_sec;
 }
 
@@ -213,11 +214,11 @@ void *diagnosticLoop(void *args)
 {
   EthercatHardware *ec((EthercatHardware *) args);
   struct timespec tick;
-  clock_gettime(CLOCK_MONOTONIC, &tick);
+  clock_gettime(CLOCK_REALTIME, &tick);
   while (!g_quit) {
     ec->collectDiagnostics();
     tick.tv_sec += 1;
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &tick, NULL);
+    clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &tick, NULL);
   }
   return NULL;
 }
@@ -399,6 +400,10 @@ void *controlLoop(void *)
   last_published = now();
   last_rt_monitor_time = now();
   last_loop_start = now();
+
+  unsigned long rt_loop_iter;
+  rt_loop_iter = 0;
+  double start, stop;
   while (!g_quit)
   {
     // Track how long the actual loop takes
@@ -409,14 +414,23 @@ void *controlLoop(void *)
     double start = now();
     if (g_reset_motors)
     {
+      start = now();
       ec.update(true, g_halt_motors);
+      stop = now();
+      if((stop - start)*MSEC_PER_SECOND > 10)
+        ROS_ERROR_STREAM("0 - ec update " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
+
       g_reset_motors = false;
       // Also, clear error flags when motor reset is requested
       g_stats.rt_loop_not_making_timing = false;
     }
     else
     {
+      start = now();
       ec.update(false, g_halt_motors);
+      stop = now();
+      if((stop - start)*MSEC_PER_SECOND > 10)
+        ROS_ERROR_STREAM("1 - ec update " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
     }
     if (g_publish_trace_requested)
     {
@@ -427,13 +441,20 @@ void *controlLoop(void *)
     double after_ec = now();
     cm.update();
     double end = now();
+    if((end - after_ec) > 10)
+      ROS_ERROR_STREAM("2 - cm update " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
 
     g_stats.ec_acc(after_ec - start);
     g_stats.cm_acc(end - after_ec);
 
     if ((end - last_published) > 1.0)
     {
+      start = now();
       publishDiagnostics(publisher);
+      stop = now();
+      if((stop - start)*MSEC_PER_SECOND > 10)
+        ROS_ERROR_STREAM("3 - publish diag " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
+
       last_published = end;
     }
 
@@ -498,7 +519,11 @@ void *controlLoop(void *)
     }
 
     // Sleep until end of period
+    start = now();
     clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &tick, NULL);
+    stop = now();
+    if((stop - start)*MSEC_PER_SECOND > 10)
+      ROS_ERROR_STREAM("4 - nanosleep " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
 
     // Calculate RT loop jitter
     struct timespec after;
@@ -513,7 +538,11 @@ void *controlLoop(void *)
       if (rtpublisher->trylock())
       {
         rtpublisher->msg_.data  = jitter;
+        start = now();
         rtpublisher->unlockAndPublish();
+        stop = now();
+        if((stop - start)*MSEC_PER_SECOND > 10)
+          ROS_ERROR_STREAM("5 - rt pub " << (stop - start)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
       }
     }
 
@@ -523,7 +552,11 @@ void *controlLoop(void *)
       g_halt_motors = true;
       g_halt_requested = false;
     }
+
+    ++rt_loop_iter;
   }
+
+  //END LOOP
 
   /* Shutdown all of the motors on exit */
   for (pr2_hardware_interface::ActuatorMap::const_iterator it = ec.hw_->actuators_.begin(); it != ec.hw_->actuators_.end(); ++it)
@@ -760,12 +793,12 @@ int main(int argc, char *argv[])
 
   // The previous EtherCAT software created a lock for any EtherCAT master.
   // This lock prevented two EtherCAT masters from running on the same computer.
-  // However, this locking scheme was too restrictive.  
+  // However, this locking scheme was too restrictive.
   // Two EtherCAT masters can run without conflicting with each other
   // as long as they are communication with different sets of EtherCAT devices.
-  // A better locking scheme is to prevent two EtherCAT 
-  // masters from running on same Ethernet interface.  
-  // Therefore in the Groovy Galapagos ROS release, the global EtherCAT lock has been removed 
+  // A better locking scheme is to prevent two EtherCAT
+  // masters from running on same Ethernet interface.
+  // Therefore in the Groovy Galapagos ROS release, the global EtherCAT lock has been removed
   // and only the per-interface lock will remain.
   if (setupPidFile(g_options.interface_) < 0) return -1;
 
@@ -797,4 +830,3 @@ int main(int argc, char *argv[])
 
   return rv;
 }
-
