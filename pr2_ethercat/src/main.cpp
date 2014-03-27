@@ -404,8 +404,12 @@ void *controlLoop(void *)
   unsigned long rt_loop_iter;
   rt_loop_iter = 0;
   double start, stop;
+  double start_total_lap, stop_total_lap;
+
   while (!g_quit)
   {
+    start_total_lap = now();
+
     // Track how long the actual loop takes
     double this_loop_start = now();
     g_stats.loop_acc(this_loop_start - last_loop_start);
@@ -552,6 +556,10 @@ void *controlLoop(void *)
       g_halt_motors = true;
       g_halt_requested = false;
     }
+
+    stop_total_lap = now();
+    if((stop_total_lap - start_total_lap)*MSEC_PER_SECOND > 10)
+      ROS_ERROR_STREAM("TOTAL lap " << (stop_total_lap - start_total_lap)*MSEC_PER_SECOND << " ["<<rt_loop_iter<<"]");
 
     ++rt_loop_iter;
   }
